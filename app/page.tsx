@@ -32,6 +32,25 @@ export default function Home() {
   useEffect(() => { document.documentElement.dataset.theme = darkMode ? "dark" : "light"; window.localStorage.setItem("cardgame26_2_theme", darkMode ? "dark" : "light"); }, [darkMode]);
   useEffect(() => { if (phase !== "playing" || !startedAt) return; const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 250); return () => window.clearInterval(timer); }, [phase, startedAt]);
 
+  const loadRemoteScores = useCallback(async () => {
+    if (!scriptUrl) return;
+    try {
+      const response = await fetch(`${scriptUrl}?action=leaderboard`, { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as { scores?: Score[] };
+      if (Array.isArray(data.scores)) {
+        setScores(data.scores);
+        window.localStorage.setItem(scoresKey, JSON.stringify(data.scores));
+      }
+    } catch {
+      // Keep the local leaderboard when the Apps Script endpoint is unavailable.
+    }
+  }, []);
+
+  // The remote leaderboard is optional until NEXT_PUBLIC_GOOGLE_SCRIPT_URL is configured.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void loadRemoteScores(); }, [loadRemoteScores]);
+
   const rankedScores = useMemo(() => [...scores].sort((a, b) => a.seconds - b.seconds || a.moves - b.moves).slice(0, 3), [scores]);
   const startGame = useCallback(() => { const trimmedName = name.trim(); if (!trimmedName) return; setName(trimmedName); setDeck(makeDeck()); setSelected([]); setMoves(0); setElapsed(0); savedResult.current = false; setStartedAt(Date.now()); setPhase("playing"); }, [name]);
   const goHome = () => { setPhase("welcome"); setDeck([]); setSelected([]); setStartedAt(null); setElapsed(0); setMoves(0); };
@@ -42,8 +61,14 @@ export default function Home() {
     savedResult.current = true;
     const result: Score = { name, moves, seconds: elapsed, finishedAt: new Date().toISOString() };
     const nextScores = [...scores, result]; setScores(nextScores); window.localStorage.setItem(scoresKey, JSON.stringify(nextScores));
-    if (scriptUrl) { try { await fetch(scriptUrl, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ timestamp: result.finishedAt, name: result.name, score: result.moves, finishtime: formatTime(result.seconds) }) }); } catch { /* Keep the local result when Apps Script is unavailable. */ } }
-  }, [elapsed, moves, name, scores]);
+    if (scriptUrl) {
+      try {
+        await fetch(scriptUrl, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ timestamp: result.finishedAt, name: result.name, score: result.moves, finishtime: formatTime(result.seconds) }) });
+        await new Promise((resolve) => window.setTimeout(resolve, 300));
+        await loadRemoteScores();
+      } catch { /* Keep the local result when the Apps Script endpoint is unavailable. */ }
+    }
+  }, [elapsed, loadRemoteScores, moves, name, scores]);
 
   // Completion is derived from the final card state, so this effect transitions the game phase once.
   // eslint-disable-next-line react-hooks/set-state-in-effect
